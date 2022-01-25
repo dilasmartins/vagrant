@@ -1,0 +1,103 @@
+---
+- name: CONFIGURANDO-CENTOS-VAGRANTBOX
+  hosts: all
+  gather_facts: true
+  become: true
+
+  handlers:
+    - name: restart_sshd
+      service:
+        name: sshd
+        state: restarted
+#Craindo usuário, grupo e instalando pacotes     
+  tasks:
+    - name: Instalar Pacotes
+      package:
+        name:
+          - vim
+          - net-tools        
+        state: installed
+    - name: Criar grupo suporte
+      group:
+        name: "suporte"
+        state: present
+    - name: Create user
+      user:
+        name: adlaedio
+        state: present
+        password: "{{ 'adlaedio' | password_hash('sha512') }}"
+        update_password: on_create
+        group: "suporte"
+        shell: /bin/bash
+    - name: Edit SSHD Config
+      lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: '^PasswordAuthentication '
+        insertafter: '#PasswordAuthentication'
+        line: 'PasswordAuthentication yes'
+      notify:
+        - restart_sshd
+#Instalando docker-ce
+    - name: "Installing Docker Prerequisite packages"
+      yum:
+        name: "{{ item }}"
+        state: latest
+      with_items:
+        - yum-utils
+        - device-mapper-persistent-data
+        - lvm2
+    - name: "Configuring docker-ce repo"
+      get_url:
+        url: https://download.docker.com/linux/centos/docker-ce.repo
+        dest: /etc/yum.repos.d/docker-ce.repo
+        mode: 0644
+    - name: " Installing Docker latest version"
+      yum:
+        name: docker-ce
+        state: present
+    - name: " Starting and Enabling Docker service"
+      service:
+        name: docker
+        state: started
+        enabled: yes
+    - name: 'add users to docker group'
+      user:
+        name: "{{ item }}"
+        groups: 'docker'
+        append: 'yes'
+      with_items: 
+        - adlaedio
+        - vagrant
+
+#Instalando docker-compose
+    - name: Check if Docker Compose is installed
+      command: docker-compose --version
+      register: docker_compose_check
+      ignore_errors: yes
+
+    - name: Download and install Docker Compose
+      get_url:
+        url: https://github.com/docker/compose/releases/download/1.29.2/docker-compose-Linux-x86_64
+        dest: /usr/bin/docker-compose
+        mode: 0755
+      when:
+        - docker_compose_check.msg is defined
+        - docker_compose_check.msg.find('No such file or directory') != -1
+
+#Copiar compose file
+    - name: Copiar compose file
+      become: true 
+      copy:
+        src: ~/vagrant/docker
+        dest: /srv
+        owner: adlaedio
+        group: suporte        
+        mode: 0664
+
+#Deploy compose stack
+    - name: Deploy containers
+      become: True
+      shell:
+        cmd: "docker-compose -f docker-compose.yml up -d"
+        chdir: /srv/docker
+
